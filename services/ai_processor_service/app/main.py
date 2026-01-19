@@ -2,6 +2,7 @@ import pika
 import json
 import os
 import time
+import redis
 import google.generativeai as genai
 from common.app.schemas import StudentQuery, QueryStatus
 
@@ -10,8 +11,14 @@ RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "user")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS", "password")
 QUEUE_NAME = "student_queries"
+NOTIFICATION_QUEUE = "outgoing_emails"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# REDIS CONNECTION (The Short-term Memory)
+# We use the hostname 'redis' because that is the service name in docker-compose
+redis_client = redis.Redis(host='redis', port=6379, db=0)
+
+# GEMINI SETUP
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
@@ -28,7 +35,6 @@ def analyze_query(content: str):
     """
     try:
         response = model.generate_content(prompt)
-        # Parse the JSON string from Gemini (handling potential markdown formatting)
         clean_text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(clean_text)
     except Exception as e:
@@ -46,36 +52,46 @@ def callback(ch, method, properties, body):
     print(f"🧠 Thinking about query from {query.sender_id}...")
     ai_result = analyze_query(query.content)
     
-    # 3. Update the Query Object
-    query.category = ai_result.get("category")
-    query.sentiment_score = ai_result.get("sentiment_score")
-    query.ai_response = ai_result.get("ai_response")
-    query.status = QueryStatus.ANSWERED
+    # 3. SAVE TO REDIS (New Step)
+    # We save the answer using the sender_id as the key so the dashboard can find it.
+    redis_key = f"query:{query.sender_id}"
+    redis_client.set(redis_key, json.dumps(ai_result), ex=3600) # Expire in 1 hour
+    print(f"💾 Saved answer to Redis: {redis_key}")
     
-    print(f"✅ AI Response: {query.ai_response}")
-    print(f"📊 Fit Score: {query.sentiment_score}")
+    # 4. Forward to Notification Service
+    notification_payload = {
+        "email": f"{query.sender_id}@std.yildiz.edu.tr",
+        "message": ai_result.get("ai_response")
+    }
+    ch.basic_publish(
+        exchange='',
+        routing_key=NOTIFICATION_QUEUE,
+        body=json.dumps(notification_payload),
+        properties=pika.BasicProperties(delivery_mode=2)
+    )
+    print(f"📨 Forwarded to Notification Service")
     
-    # (Future Step: Push to 'processed_queries' queue or Database)
-    
-    # 4. Acknowledge message so RabbitMQ deletes it from queue
+    # 5. Acknowledge
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 def start_consuming():
     credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
     parameters = pika.ConnectionParameters(host=RABBITMQ_HOST, credentials=credentials)
     
-    # Wait for RabbitMQ to be ready
+    # Retry loop to wait for RabbitMQ to start
     for _ in range(5):
         try:
             connection = pika.BlockingConnection(parameters)
             channel = connection.channel()
+            # Declare BOTH queues to be safe
             channel.queue_declare(queue=QUEUE_NAME, durable=True)
-            channel.basic_qos(prefetch_count=1)
+            channel.queue_declare(queue=NOTIFICATION_QUEUE, durable=True)
+            
             channel.basic_consume(queue=QUEUE_NAME, on_message_callback=callback)
-            print("🚀 AI Processor is waiting for messages...")
+            print("🚀 AI Processor (v2 - Redis Enabled) is waiting for messages...")
             channel.start_consuming()
             break
-        except pika.exceptions.AMQPConnectionError:
+        except Exception as e:
             print("⏳ RabbitMQ not ready, retrying in 5 seconds...")
             time.sleep(5)
 
