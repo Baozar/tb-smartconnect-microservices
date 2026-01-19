@@ -34,11 +34,13 @@ class QueryLog(Base):
     __tablename__ = "query_logs"
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    platform = Column(String) # YouTube / Instagram
+    platform = Column(String) 
     sender_id = Column(String)
     question = Column(String)
     category = Column(String)
     sentiment_score = Column(Float)
+    # NEW COLUMN
+    attributed_influencer = Column(String, nullable=True)
 
 # Pydantic Model for Input
 class LogCreate(BaseModel):
@@ -47,6 +49,8 @@ class LogCreate(BaseModel):
     question: str
     category: str
     sentiment_score: float
+    # NEW FIELD
+    attributed_influencer: str = None
 
 # Create tables
 Base.metadata.create_all(bind=engine)

@@ -24,7 +24,7 @@ RATE_LIMIT_WINDOW = 86400
 redis_client = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel('gemini-flash-lite-latest')
 
 def check_rate_limit(user_id):
     key = f"rate_limit:{user_id}"
@@ -69,18 +69,22 @@ def callback(ch, method, properties, body):
     redis_client.set(redis_key, json.dumps(ai_result), ex=3600)
     
     # 4. LOG TO POSTGRES (For Analytics) <--- NEW PART
+    # 4. LOG TO POSTGRES (For Analytics)
     try:
         log_payload = {
             "platform": query.platform,
             "sender_id": query.sender_id,
             "question": query.content,
             "category": ai_result.get("category", "unknown"),
-            "sentiment_score": ai_result.get("sentiment_score", 0.0)
+            "sentiment_score": ai_result.get("sentiment_score", 0.0),
+            # Extract influencer from the query object (we will add this to the schema next)
+            "attributed_influencer": getattr(query, "attributed_influencer", None) 
         }
         requests.post(KNOWLEDGE_SERVICE_URL, json=log_payload)
         print("💾 History logged to Knowledge Service")
     except Exception as e:
         print(f"⚠️ Failed to log history: {e}")
+
 
     # 5. NOTIFICATION
     notification_payload = {

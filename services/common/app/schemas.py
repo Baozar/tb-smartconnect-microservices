@@ -23,6 +23,7 @@ class StudentQuery(BaseModel):
     content: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     status: QueryStatus = QueryStatus.RECEIVED
+    attributed_influencer: Optional[str] = None
     
     # Analysis results (Added by AI Service later)
     sentiment_score: Optional[float] = None

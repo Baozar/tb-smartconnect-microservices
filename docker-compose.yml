@@ -124,8 +124,10 @@ services:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: tb_knowledge_db
+    # volumes:
+    #   - ./infra/postgres_data:/var/lib/postgresql/data
     volumes:
-      - ./infra/postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres_data_v2:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user -d tb_knowledge_db"]
       interval: 10s
