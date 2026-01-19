@@ -1,0 +1,162 @@
+version: '3.8'
+
+services:
+  # -----------------------------
+  # INFRASTRUCTURE (The Backbone)
+  # -----------------------------
+  
+  # 1. Message Broker (RabbitMQ)
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: tb_rabbitmq
+    ports:
+      - "5672:5672"   # Communication port
+      - "15672:15672" # Management Dashboard
+    environment:
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: password   
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tb_network
+
+
+  # -----------------------------
+  # MICROSERVICES
+  # -----------------------------
+  
+  ingestion_service:
+    build:
+      context: .
+      dockerfile: services/ingestion_service/Dockerfile
+    container_name: tb_ingestion
+    ports:
+      - "8001:8000"  # Expose on port 8001
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_USER=user       
+      - RABBITMQ_PASS=password   
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tb_network
+
+  ai_processor_service:
+    build:
+      context: .
+      dockerfile: services/ai_processor_service/Dockerfile
+    container_name: tb_ai_processor
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_USER=user
+      - RABBITMQ_PASS=password
+      - GEMINI_API_KEY=${GEMINI_API_KEY}  # Pulls from your terminal export
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tb_network
+  
+
+  knowledge_service:
+    build:
+      context: .
+      dockerfile: services/knowledge_service/Dockerfile
+    container_name: tb_knowledge
+    ports:
+      - "8002:8002"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=user
+      - POSTGRES_PASS=password
+      - POSTGRES_DB=tb_knowledge_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tb_network
+  
+  notification_service:
+    build:
+      context: .
+      dockerfile: services/notification_service/Dockerfile
+    container_name: tb_notification
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_USER=user
+      - RABBITMQ_PASS=password
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tb_network
+
+  analytics_service:
+    build:
+      context: .
+      dockerfile: services/analytics_service/Dockerfile
+    container_name: tb_analytics
+    ports:
+      - "8501:8501"  # Streamlit Port
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=user
+      - POSTGRES_PASS=password
+      - POSTGRES_DB=tb_knowledge_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tb_network
+
+      
+  # 2. Structured Database (PostgreSQL) - For Knowledge & Users
+  postgres:
+    image: postgres:15
+    container_name: tb_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: tb_knowledge_db
+    volumes:
+      - ./infra/postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d tb_knowledge_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tb_network
+
+  # 3. Unstructured Database (MongoDB) - For Ingestion Logs
+  mongo:
+    image: mongo:6
+    container_name: tb_mongo
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: user
+      MONGO_INITDB_ROOT_PASSWORD: password
+    volumes:
+      - ./infra/mongo_data:/data/db
+    networks:
+      - tb_network
+
+  # 4. Cache (Redis) - For AI Results
+  redis:
+    image: redis:7
+    container_name: tb_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - tb_network
+
+networks:
+  tb_network:
+    driver: bridge
